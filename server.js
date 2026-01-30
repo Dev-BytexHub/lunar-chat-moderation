@@ -1,7 +1,6 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
-const crypto = require('crypto');
 const app = express();
 
 app.use(bodyParser.json());
@@ -12,36 +11,6 @@ const punishments = {
 };
 
 const DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1466903892163039274/V-BA7Zd9mU_uAFf5Rqs_2rj9sAy8o6pVuxpwImiN0Zo42cIr_AReZ7HEI1JQmTsreNwD";
-
-// Verificação de assinatura do Discord
-function verifyDiscordSignature(req) {
-  const signature = req.headers['x-signature-ed25519'];
-  const timestamp = req.headers['x-signature-timestamp'];
-  const body = JSON.stringify(req.body);
-  
-  // Se não houver PUBLIC_KEY configurada, aceita qualquer requisição (modo dev)
-  if (!process.env.DISCORD_PUBLIC_KEY) {
-    console.log('[WARN] Discord public key não configurada - aceitando requisição');
-    return true;
-  }
-  
-  try {
-    const isValid = crypto.verify(
-      'ed25519',
-      Buffer.from(timestamp + body),
-      {
-        key: Buffer.from(process.env.DISCORD_PUBLIC_KEY, 'hex'),
-        format: 'der',
-        type: 'spki'
-      },
-      Buffer.from(signature, 'hex')
-    );
-    return isValid;
-  } catch (error) {
-    console.error('[ERROR] Erro ao verificar assinatura:', error);
-    return false;
-  }
-}
 
 app.get('/check/:userId', (req, res) => {
   const userId = req.params.userId;
@@ -108,68 +77,71 @@ app.post('/punish', async (req, res) => {
 app.post('/discord-interaction', async (req, res) => {
   const interaction = req.body;
   
+  console.log('[DISCORD] Recebida interação:', JSON.stringify(interaction, null, 2));
+  
   // Responder ao PING do Discord (verificação inicial)
   if (interaction.type === 1) {
-    console.log('[DISCORD] Recebido PING do Discord - respondendo PONG');
+    console.log('[DISCORD] Respondendo PONG ao Discord');
     return res.json({ type: 1 });
   }
   
   // Processar interações de botões
-  if (interaction.type !== 3) {
-    return res.status(400).json({ error: 'Invalid interaction type' });
+  if (interaction.type === 3) {
+    const customId = interaction.data.custom_id;
+    const parts = customId.split('_');
+    const action = parts[0] + '_' + parts[1];
+    const userId = parts[2];
+    let responseMessage = '';
+    
+    switch (action) {
+      case 'ban_perm':
+        punishments.bans.set(userId, {
+          permanent: true,
+          reason: 'Ban aplicado por moderador',
+          timestamp: Math.floor(Date.now() / 1000)
+        });
+        responseMessage = `✅ Usuário ${userId} foi **banido permanentemente**.`;
+        break;
+      case 'ban_7d':
+        const ban7dExpiry = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
+        punishments.bans.set(userId, {
+          permanent: false,
+          expiry: ban7dExpiry,
+          reason: 'Ban temporário por moderador',
+          timestamp: Math.floor(Date.now() / 1000)
+        });
+        responseMessage = `✅ Usuário ${userId} foi **banido por 7 dias**.`;
+        break;
+      case 'mute_1h':
+        const mute1hExpiry = Math.floor(Date.now() / 1000) + (60 * 60);
+        punishments.mutes.set(userId, {
+          expiry: mute1hExpiry,
+          timestamp: Math.floor(Date.now() / 1000)
+        });
+        responseMessage = `✅ Usuário ${userId} foi **mutado por 1 hora**.`;
+        break;
+      case 'ignore':
+        responseMessage = `✅ Alerta para usuário ${userId} foi **ignorado**.`;
+        break;
+      default:
+        responseMessage = '❌ Ação desconhecida.';
+    }
+    
+    try {
+      await axios.patch(
+        `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
+        { content: responseMessage, components: [] }
+      );
+    } catch (error) {
+      console.error('Erro ao atualizar mensagem:', error);
+    }
+    
+    console.log(`[ACTION] ${action} aplicado ao usuário ${userId}`);
+    return res.json({ type: 4, data: { content: responseMessage, flags: 64 } });
   }
   
-  const customId = interaction.data.custom_id;
-  const parts = customId.split('_');
-  const action = parts[0] + '_' + parts[1];
-  const userId = parts[2];
-  let responseMessage = '';
-  
-  switch (action) {
-    case 'ban_perm':
-      punishments.bans.set(userId, {
-        permanent: true,
-        reason: 'Ban aplicado por moderador',
-        timestamp: Math.floor(Date.now() / 1000)
-      });
-      responseMessage = `✅ Usuário ${userId} foi **banido permanentemente**.`;
-      break;
-    case 'ban_7d':
-      const ban7dExpiry = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60);
-      punishments.bans.set(userId, {
-        permanent: false,
-        expiry: ban7dExpiry,
-        reason: 'Ban temporário por moderador',
-        timestamp: Math.floor(Date.now() / 1000)
-      });
-      responseMessage = `✅ Usuário ${userId} foi **banido por 7 dias**.`;
-      break;
-    case 'mute_1h':
-      const mute1hExpiry = Math.floor(Date.now() / 1000) + (60 * 60);
-      punishments.mutes.set(userId, {
-        expiry: mute1hExpiry,
-        timestamp: Math.floor(Date.now() / 1000)
-      });
-      responseMessage = `✅ Usuário ${userId} foi **mutado por 1 hora**.`;
-      break;
-    case 'ignore':
-      responseMessage = `✅ Alerta para usuário ${userId} foi **ignorado**.`;
-      break;
-    default:
-      responseMessage = '❌ Ação desconhecida.';
-  }
-  
-  try {
-    await axios.patch(
-      `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
-      { content: responseMessage, components: [] }
-    );
-  } catch (error) {
-    console.error('Erro ao atualizar mensagem:', error);
-  }
-  
-  res.json({ type: 4, data: { content: responseMessage, flags: 64 } });
-  console.log(`[ACTION] ${action} aplicado ao usuário ${userId}`);
+  // Tipo de interação não suportado
+  return res.status(400).json({ error: 'Invalid interaction type' });
 });
 
 app.get('/', (req, res) => {
@@ -177,7 +149,8 @@ app.get('/', (req, res) => {
     status: 'online',
     bans: punishments.bans.size,
     mutes: punishments.mutes.size,
-    version: '2.0'
+    version: '2.1',
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -198,6 +171,7 @@ app.delete('/remove/:userId', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🛡️ Embee Chat Moderation Server v2.0 rodando na porta ${PORT}`);
+  console.log(`🛡️ Embee Chat Moderation Server v2.1 rodando na porta ${PORT}`);
   console.log(`📡 Endpoint Discord: /discord-interaction`);
+  console.log(`🌐 Pronto para receber requisições!`);
 });
