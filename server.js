@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
+const crypto = require('crypto');
 const app = express();
 
 app.use(bodyParser.json());
@@ -11,6 +12,36 @@ const punishments = {
 };
 
 const DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1466903892163039274/V-BA7Zd9mU_uAFf5Rqs_2rj9sAy8o6pVuxpwImiN0Zo42cIr_AReZ7HEI1JQmTsreNwD";
+
+// Verificação de assinatura do Discord
+function verifyDiscordSignature(req) {
+  const signature = req.headers['x-signature-ed25519'];
+  const timestamp = req.headers['x-signature-timestamp'];
+  const body = JSON.stringify(req.body);
+  
+  // Se não houver PUBLIC_KEY configurada, aceita qualquer requisição (modo dev)
+  if (!process.env.DISCORD_PUBLIC_KEY) {
+    console.log('[WARN] Discord public key não configurada - aceitando requisição');
+    return true;
+  }
+  
+  try {
+    const isValid = crypto.verify(
+      'ed25519',
+      Buffer.from(timestamp + body),
+      {
+        key: Buffer.from(process.env.DISCORD_PUBLIC_KEY, 'hex'),
+        format: 'der',
+        type: 'spki'
+      },
+      Buffer.from(signature, 'hex')
+    );
+    return isValid;
+  } catch (error) {
+    console.error('[ERROR] Erro ao verificar assinatura:', error);
+    return false;
+  }
+}
 
 app.get('/check/:userId', (req, res) => {
   const userId = req.params.userId;
@@ -70,11 +101,20 @@ app.post('/punish', async (req, res) => {
       });
       break;
   }
+  
   res.json({ success: true });
 });
 
 app.post('/discord-interaction', async (req, res) => {
   const interaction = req.body;
+  
+  // Responder ao PING do Discord (verificação inicial)
+  if (interaction.type === 1) {
+    console.log('[DISCORD] Recebido PING do Discord - respondendo PONG');
+    return res.json({ type: 1 });
+  }
+  
+  // Processar interações de botões
   if (interaction.type !== 3) {
     return res.status(400).json({ error: 'Invalid interaction type' });
   }
@@ -158,5 +198,6 @@ app.delete('/remove/:userId', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🛡️ Embee Chat Moderation Server rodando na porta ${PORT}`);
+  console.log(`🛡️ Embee Chat Moderation Server v2.0 rodando na porta ${PORT}`);
+  console.log(`📡 Endpoint Discord: /discord-interaction`);
 });
