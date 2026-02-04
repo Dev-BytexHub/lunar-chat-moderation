@@ -1,7 +1,7 @@
 {
-  "name": "embee-chat-moderation",
+  "name": "lunar-chat-moderation",
   "version": "2.0.0",
-  "description": "Servidor de moderação Embee Chat",
+  "description": "Servidor de moderação Lunar Chat",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
