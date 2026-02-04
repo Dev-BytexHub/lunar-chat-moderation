@@ -118,5 +118,5 @@ app.get('/check-mute/:userId', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🛡️ Embee Chat v4.0 - Port ${PORT}`);
+  console.log(`🛡️ Lunar Chat v4.0 - Port ${PORT}`);
 });
